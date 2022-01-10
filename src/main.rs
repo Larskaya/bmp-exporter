@@ -1,12 +1,44 @@
 
+use std::sync::mpsc::Sender;
+use std::sync::mpsc::channel;
+use std::time::Instant;
+
 // use exporter::Image;
 use exporter::Pixel;
 use exporter::ComplexNum;
 
 use sfml::graphics::Color;
+use sfml::graphics::Vertex;
 use sfml::system::Vector2f;
+
 use sfml::window::mouse::Button;
 use sfml::{window::{Event, Style}, graphics::{VertexArray, PrimitiveType, RenderWindow, RenderTarget, RenderStates}};
+
+use std::thread::{self, JoinHandle};
+
+fn get_thread(tx: Sender<Vertex>, start_x: u32, w: u32, h: u32, rx: f64, lx: f64, uy: f64, dy: f64) -> JoinHandle<()> {
+    
+    let handle = thread::spawn(move || {
+        for x in 0..w {
+            for y in 0..h {
+                let cx: f64 = x as f64 / (w-1) as f64 * (rx - lx) + lx;
+                let cy: f64 = y as f64 / (h-1) as f64 * (uy - dy) + dy;
+                
+                let pxl = pixel_color(cx, cy);
+                let vertex = Vertex::new(
+                    Vector2f::new((start_x + x) as f32, y as f32), 
+                    Color::rgb(pxl.r , pxl.g , pxl.b ),
+                    Vector2f::new(x as f32, y as f32),
+                );
+                let value = vertex;
+                tx.send(value).unwrap();
+            }
+        }
+    });
+    return handle
+    
+}
+
 
 
 fn pixel_color(x: f64, y: f64) -> Pixel {
@@ -14,7 +46,7 @@ fn pixel_color(x: f64, y: f64) -> Pixel {
 
     let mut z = ComplexNum::new(0.0, 0.0);
 
-    let n = 1000.0;
+    let n = 500.0;
     let mut i = 0.0;
     while i < n && z.abs() < 2.0 {
         z = z.multiply(&z).add(&c);
@@ -27,22 +59,36 @@ fn pixel_color(x: f64, y: f64) -> Pixel {
 
 fn translate(v: f64, d: f64, lv: f64, hv: f64) -> f64 {
     v / (d-1.0) * (hv - lv) + lv
-    
 }
 
 
-fn render( va: &mut VertexArray, w: u32, h: u32, lx: f64, rx: f64, dy: f64, uy: f64) {
-    for x in 0..w {
-        for y in 0..h {
-            let cx: f64 = x as f64 / (w-1) as f64 * (rx - lx) + lx;
-            let cy: f64 = y as f64 / (h-1) as f64 * (uy - dy) + dy;
-            let index = w as usize * y as usize + x as usize;
-            let pxl = pixel_color(cx, cy);
-            va[index].position = Vector2f::new(x as f32, y as f32);
-            va[index].color = Color::rgb(pxl.r , pxl.g , pxl.b );
-        }
+fn render(va: &mut VertexArray, w: u32, h: u32, lx: f64, rx: f64, dy: f64, uy: f64) {
+    let parts = 8;
+    
+    let mut threads = Vec::new();
+    let (vertex_tx, vertex_rx) = channel();
 
+    let need_w = w / parts;
+    let part_w = (rx - lx) / parts as f64;
+     
+    for i in 0..parts { 
+        let lx2 = lx + part_w * i as f64;
+        let rx2 = lx2 + part_w;
+
+        let start_x = need_w * i;
+        let handle = get_thread(vertex_tx.clone(), start_x, need_w, h, rx2, lx2, uy, dy);
+        threads.push(handle);
     }
+
+    for index in 0..w as usize * h as usize{
+        let rec = vertex_rx.recv().unwrap();
+        va[index] = rec;
+    }   
+
+    for thread in threads {
+        thread.join().unwrap();
+    }
+   
 }
 
 
@@ -55,7 +101,6 @@ fn main() {
                                 &Default::default());
 
     window.set_framerate_limit(60);
-
     
     let mut pixels = VertexArray::new(
         PrimitiveType::POINTS, 
@@ -68,6 +113,8 @@ fn main() {
     render(&mut pixels, w, h, lx, rx, dy, uy);
 
     while window.is_open() {
+        // let inst = Instant::now();
+
         while let Some(event) = window.poll_event() {
             if event == Event::Closed {
                 window.close();
@@ -87,8 +134,10 @@ fn main() {
                     dy = cy - lenght_y / 8.0;
                     uy = cy + lenght_y / 8.0;
 
-                    render(&mut pixels, w, h, lx, rx, dy, uy);
 
+                    let inst = Instant::now();
+                    render(&mut pixels, w, h, lx, rx, dy, uy);
+                    println!("Render time: {}", (Instant::now() - inst).as_secs_f64());
                 }
             }
         }
@@ -100,25 +149,6 @@ fn main() {
     
         // End the current frame and display its contents on screen
         window.display();
+        
     }
-
-    // let w = 5000;
-    // let h = 5000;
-
-    
-    // let mut image = Image::new(w, h);
-
-
-    // for x in 0..w {
-    //     for y in 0..h {
-    //         let cx = 4.0 / (w as f64 - 1.0) * x as f64 - 2.0;
-    //         let cy = 4.0 / -(h  as f64 + 1.0) * y as f64 + 2.0;
-    //         let pxl = pixel_color(cx, cy);
-    //         // image.set_pixel(x, y, pxl);
-    //     }
-    // }
-    
-
-    // image.save("image.bmp");
-
 }
